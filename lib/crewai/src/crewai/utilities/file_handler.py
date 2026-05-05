@@ -134,15 +134,16 @@ class PickleHandler:
     """Handler for saving and loading crew state using JSON serialization.
 
     Replaces the former pickle-based implementation to eliminate the risk of
-    arbitrary code execution via crafted .pkl files (CWE-502). Legacy .pkl
-    files are intentionally not loaded; call initialize_file() to start fresh.
+    arbitrary code execution via crafted .pkl files (CWE-502). Any legacy .pkl
+    file at the equivalent path is deleted at construction time so it cannot
+    be loaded by any code path.
 
     Attributes:
         file_path: The path to the JSON data file.
     """
 
     def __init__(self, file_name: str) -> None:
-        """Initialize the PickleHandler with the name of the file where data will be stored.
+        """Initialize the PickleHandler and purge any legacy pickle file.
 
         The file will be saved in the current directory.
 
@@ -156,6 +157,34 @@ class PickleHandler:
             file_name += ".json"
 
         self.file_path = os.path.join(os.getcwd(), file_name)
+        self._purge_legacy_pkl()
+
+    def _purge_legacy_pkl(self) -> None:
+        """Delete any legacy pickle file at the equivalent path.
+
+        Pickle files execute arbitrary code on load (CWE-502). Removing the
+        file at init time ensures no code path — including direct pickle.load
+        calls or reverted code — can deserialize it.
+        """
+        legacy_pkl = self.file_path[:-5] + ".pkl"
+        if not os.path.exists(legacy_pkl):
+            return
+        try:
+            os.remove(legacy_pkl)
+            logger.warning(
+                "Deleted legacy pickle file %s (CWE-502: unsafe deserialization "
+                "prevention). Saved training/memory state has been cleared; "
+                "reinitialize as needed.",
+                legacy_pkl,
+            )
+        except OSError as e:
+            logger.error(
+                "Failed to delete legacy pickle file %s: %s. "
+                "Manually delete this file before running — it poses an "
+                "arbitrary code execution risk (CWE-502).",
+                legacy_pkl,
+                e,
+            )
 
     def initialize_file(self) -> None:
         """Initialize the file with an empty dictionary and overwrite any existing data."""
@@ -181,15 +210,6 @@ class PickleHandler:
             The data loaded from the file, or an empty dict if the file does not exist
             or is empty.
         """
-        legacy_pkl = self.file_path[:-5] + ".pkl"
-        if os.path.exists(legacy_pkl):
-            logger.warning(
-                "Legacy pickle file found at %s. It will not be loaded to prevent "
-                "unsafe deserialization (CWE-502). Delete it and call "
-                "initialize_file() to reset state.",
-                legacy_pkl,
-            )
-
         with store_lock(f"file:{os.path.realpath(self.file_path)}"):
             if (
                 not os.path.exists(self.file_path)
