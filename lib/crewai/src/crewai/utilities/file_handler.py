@@ -1,12 +1,15 @@
 from datetime import datetime
 import json
+import logging
 import os
-import pickle
 from typing import Any, TypedDict
 
 from typing_extensions import Unpack
 
 from crewai.utilities.lock_store import lock as store_lock
+
+
+logger = logging.getLogger(__name__)
 
 
 class LogEntry(TypedDict, total=False):
@@ -128,10 +131,14 @@ class FileHandler:
 
 
 class PickleHandler:
-    """Handler for saving and loading data using pickle.
+    """Handler for saving and loading crew state using JSON serialization.
+
+    Replaces the former pickle-based implementation to eliminate the risk of
+    arbitrary code execution via crafted .pkl files (CWE-502). Legacy .pkl
+    files are intentionally not loaded; call initialize_file() to start fresh.
 
     Attributes:
-        file_path: The path to the pickle file.
+        file_path: The path to the JSON data file.
     """
 
     def __init__(self, file_name: str) -> None:
@@ -141,9 +148,12 @@ class PickleHandler:
 
         Args:
             file_name: The name of the file for saving and loading data.
+                       Legacy .pkl extensions are automatically remapped to .json.
         """
-        if not file_name.endswith(".pkl"):
-            file_name += ".pkl"
+        if file_name.endswith(".pkl"):
+            file_name = file_name[:-4] + ".json"
+        elif not file_name.endswith(".json"):
+            file_name += ".json"
 
         self.file_path = os.path.join(os.getcwd(), file_name)
 
@@ -152,22 +162,34 @@ class PickleHandler:
         self.save({})
 
     def save(self, data: Any) -> None:
-        """
-        Save the data to the specified file using pickle.
+        """Save the data to the specified file using JSON serialization.
 
         Args:
-          data: The data to be saved to the file.
+          data: The data to be saved to the file. Must be JSON-serializable.
+
+        Raises:
+            TypeError: If data contains values that cannot be serialized to JSON.
         """
         with store_lock(f"file:{os.path.realpath(self.file_path)}"):
-            with open(self.file_path, "wb") as f:
-                pickle.dump(obj=data, file=f)
+            with open(self.file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
 
     def load(self) -> Any:
-        """Load the data from the specified file using pickle.
+        """Load the data from the specified file.
 
         Returns:
-            The data loaded from the file.
+            The data loaded from the file, or an empty dict if the file does not exist
+            or is empty.
         """
+        legacy_pkl = self.file_path[:-5] + ".pkl"
+        if os.path.exists(legacy_pkl):
+            logger.warning(
+                "Legacy pickle file found at %s. It will not be loaded to prevent "
+                "unsafe deserialization (CWE-502). Delete it and call "
+                "initialize_file() to reset state.",
+                legacy_pkl,
+            )
+
         with store_lock(f"file:{os.path.realpath(self.file_path)}"):
             if (
                 not os.path.exists(self.file_path)
@@ -175,10 +197,8 @@ class PickleHandler:
             ):
                 return {}
 
-            with open(self.file_path, "rb") as file:
+            with open(self.file_path, encoding="utf-8") as file:
                 try:
-                    return pickle.load(file)  # noqa: S301
-                except EOFError:
+                    return json.load(file)
+                except (json.JSONDecodeError, EOFError):
                     return {}
-                except Exception:
-                    raise

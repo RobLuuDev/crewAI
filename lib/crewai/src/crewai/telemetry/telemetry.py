@@ -146,12 +146,20 @@ class Telemetry:
 
     @classmethod
     def _is_telemetry_disabled(cls) -> bool:
-        """Check if telemetry should be disabled based on environment variables."""
-        return (
+        """Check if telemetry should be disabled.
+
+        Telemetry is disabled by default in this fork. To opt in, set
+        CREWAI_ENABLE_TELEMETRY=true. Legacy force-disable variables
+        (OTEL_SDK_DISABLED, CREWAI_DISABLE_TELEMETRY, CREWAI_DISABLE_TRACKING)
+        still take effect when set to true.
+        """
+        if (
             os.getenv("OTEL_SDK_DISABLED", "false").lower() == "true"
             or os.getenv("CREWAI_DISABLE_TELEMETRY", "false").lower() == "true"
             or os.getenv("CREWAI_DISABLE_TRACKING", "false").lower() == "true"
-        )
+        ):
+            return True
+        return os.getenv("CREWAI_ENABLE_TELEMETRY", "false").lower() != "true"
 
     def _should_execute_telemetry(self) -> bool:
         """Check if telemetry operations should be executed."""
